@@ -8,6 +8,7 @@ Arbeitsspeicher, damit die Oberfläche eine Vorschau zeigen kann.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import threading
 from collections.abc import Callable, Iterable
@@ -73,6 +74,7 @@ class Fetcher:
             except FetchError as exc:
                 return exc
             except Exception as exc:  # ein kaputtes Bild darf den Lauf nie beenden
+                logging.getLogger("webfaenger").exception("Bild fehlgeschlagen: %s", item.url)
                 return FetchError(f"Unerwarteter Fehler: {exc}")
             return data, type_from_mime(ctype) or type_from_url(final_url)
 

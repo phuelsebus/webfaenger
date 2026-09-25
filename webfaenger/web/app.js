@@ -36,7 +36,8 @@ window.addEventListener("pywebviewready", init);
 
 async function init() {
   state.api = window.pywebview.api;
-  const { settings, collisions, theme } = await state.api.init();
+  const { settings, collisions, theme, version } = await state.api.init();
+  $("version").textContent = version;
   if (theme) document.documentElement.dataset.theme = theme;
 
   state.shownTypes = new Set(settings.types);
@@ -439,6 +440,7 @@ function bindEvents() {
     $(id).addEventListener("input", () => { updateNamePreview(); persist(); });
   }
   $("collision").addEventListener("change", persist);
+  $("logBtn").addEventListener("click", () => state.api.open_log());
 
   // Dialoge: Schließen-Knöpfe und Klick auf den Hintergrund
   for (const dialog of [$("settings"), $("viewer")]) {

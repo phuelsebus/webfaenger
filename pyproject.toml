@@ -1,6 +1,6 @@
 [project]
 name = "webfaenger"
-version = "0.1.0"
+version = "1.0.0"
 description = "Leichtgewichtiger Desktop-Downloader für Bilder von Webseiten"
 requires-python = ">=3.11"
 dependencies = ["pywebview>=6"]

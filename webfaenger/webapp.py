@@ -18,6 +18,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from . import __version__
+from . import log
 from . import settings as settings_mod
 from .downloader import FetchedImage, Fetcher, save_images
 from .models import IMAGE_TYPES
@@ -108,7 +110,8 @@ class Api:
     def init(self) -> dict:
         forced = os.environ.get("WEBFAENGER_THEME")  # "light"/"dark", sonst wie Windows
         return {"settings": asdict(self._settings), "types": list(IMAGE_TYPES),
-                "collisions": COLLISIONS, "theme": forced if forced in ("light", "dark") else None}
+                "collisions": COLLISIONS, "version": __version__,
+                "theme": forced if forced in ("light", "dark") else None}
 
     def poll(self) -> list[dict]:
         with self._lock:
@@ -135,6 +138,7 @@ class Api:
         except (ValueError, FetchError) as exc:
             error = str(exc)
         except Exception as exc:  # nie mit hängender Oberfläche enden
+            log.logger.exception("Suche fehlgeschlagen: %s", url)
             error = f"Unerwarteter Fehler: {exc}"
         else:
             error = None
@@ -223,11 +227,16 @@ class Api:
                                  on_progress=lambda done, total, msg: self._emit(
                                      type="save_progress", done=done, total=total, message=msg))
         except OSError:
+            log.logger.exception("Zielordner nicht anlegbar: %s", folder)
+            message = "Der Zielordner lässt sich nicht anlegen. Bitte einen anderen Ordner wählen."
+            report = None
+        except Exception as exc:
+            log.logger.exception("Speichern fehlgeschlagen")
+            message = f"Unerwarteter Fehler beim Speichern: {exc}"
             report = None
         self._busy = False
         if report is None:
-            self._emit(type="save_error", message="Der Zielordner lässt sich nicht anlegen. "
-                                                  "Bitte einen anderen Ordner wählen.")
+            self._emit(type="save_error", message=message)
             return
         self._emit(type="save_done", summary=report_summary(report), folder=str(folder),
                    saved=len(report.saved), failed=[f"{u} ({e})" for u, e in report.failed])
@@ -237,6 +246,11 @@ class Api:
             os.startfile(self._last_folder)  # noqa: S606 – öffnet den Explorer
             return {"ok": True}
         return {"error": "Den Ordner gibt es noch nicht. Er wird beim ersten Speichern angelegt."}
+
+    def open_log(self) -> None:
+        folder = log.log_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        os.startfile(folder)  # noqa: S606 – öffnet den Explorer
 
     def save_settings(self, data: dict) -> None:
         defaults = settings_mod.Settings()
@@ -335,8 +349,15 @@ def _start_server(api: Api) -> ThreadingHTTPServer:
     return server
 
 
+def _crash_message(text: str) -> None:
+    message_box("Webfänger", "Es ist ein unerwarteter Fehler aufgetreten.\n\n"
+                f"{text}\n\nDetails stehen im Protokoll:\n{log.log_dir() / 'webfaenger.log'}")
+
+
 def main() -> None:
+    log.setup(on_crash=_crash_message)
     if not webview2_installed():
+        log.logger.warning("WebView2 fehlt")
         message_box("Webfänger", "Webfänger braucht die Microsoft Edge WebView2-Laufzeit. "
                                  "Sie ist in Windows 11 enthalten und lässt sich hier kostenlos "
                                  f"installieren:\n\n{WEBVIEW2_DOWNLOAD}")
