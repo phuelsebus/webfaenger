@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "pyinstaller"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
