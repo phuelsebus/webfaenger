@@ -96,9 +96,9 @@ def fetch(url: str, *, referer: str | None = None, timeout: float = 15,
             if attempt < retries:
                 time.sleep(1 + attempt)
                 continue
-            raise FetchError("Zeitüberschreitung oder Verbindung abgebrochen") from exc
+            raise FetchError("Die Verbindung wurde unterbrochen oder hat zu lange gedauert.") from exc
         except (ValueError, http.client.HTTPException) as exc:
-            raise FetchError("Ungültige Adresse oder Serverantwort") from exc
+            raise FetchError("Die Antwort des Servers war fehlerhaft.") from exc
     raise FetchError("Unbekannter Fehler")  # pragma: no cover
 
 
@@ -125,9 +125,9 @@ def _url_error_message(reason: object) -> str:
 
 def _http_message(code: int) -> str:
     return {
-        401: "Anmeldung erforderlich (401)",
+        401: "Nur mit Anmeldung erreichbar (401)",
         403: "Zugriff verweigert (403)",
         404: "Nicht gefunden (404)",
         410: "Nicht mehr vorhanden (410)",
-        429: "Zu viele Anfragen – Server bremst (429)",
-    }.get(code, f"Serverfehler ({code})")
+        429: "Zu viele Anfragen, der Server bremst (429). Etwas warten und erneut versuchen.",
+    }.get(code, f"Der Server meldet einen Fehler ({code}). Später erneut versuchen.")

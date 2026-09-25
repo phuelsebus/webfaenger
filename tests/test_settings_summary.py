@@ -36,7 +36,9 @@ def test_scan_summary():
     headline, types, filt = scan_summary(result, frozenset({"jpg"}))
     assert headline == "4 Bilder gefunden auf example.com"
     assert types == "jpg 2 · svg 1 · unbekannt 1"
-    assert filt == "1 durch Dateityp-Filter ausgeblendet, 3 werden geladen"
+    assert filt == "1 durch den Dateityp-Filter ausgeblendet, 3 werden geprüft"
+    only_jpg = ScanResult("https://example.com/", result.candidates[:2])
+    assert scan_summary(only_jpg, frozenset({"png"}))[2].startswith("Alle sind durch")
     assert scan_summary(ScanResult("https://e.org/", []), frozenset())[0].startswith("Keine")
 
 
@@ -44,4 +46,4 @@ def test_report_summary():
     report = DownloadReport(bytes_written=3 * 1024, skipped_small=2,
                             failed=[("u", "404")])
     assert report_summary(report) == ("Fertig: 0 Bilder gespeichert (3 KB)\n"
-                                      "Nicht gespeichert: 2 zu klein, 1 fehlgeschlagen")
+                                      "Nicht gespeichert: 2 zu klein, 1 mit Fehler")

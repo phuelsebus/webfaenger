@@ -42,7 +42,9 @@ def test_modes():
 
 def test_pattern_validation():
     assert validate_pattern("{name}_{nr:03}") is None
-    assert "Unbekannt" in validate_pattern("{foo}")
+    assert validate_pattern("{foo}") == "{foo} ist kein bekannter Platzhalter."
+    assert validate_pattern("{nr") == "Die geschweiften Klammern { } passen nicht zusammen."
+    assert validate_pattern("  ") == "Das Muster ist leer."
     assert validate_pattern("{name.__class__}") is not None
     assert validate_pattern("{name") is not None
 

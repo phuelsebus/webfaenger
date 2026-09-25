@@ -20,14 +20,18 @@ def scan_summary(result: ScanResult, allowed: frozenset[str]) -> tuple[str, str,
     host = urlsplit(result.page_url).hostname or result.page_url
     if total == 0:
         return (f"Keine Bilder gefunden auf {host}",
-                "Die Seite lädt ihre Bilder vermutlich erst per JavaScript.", "")
+                "Möglicherweise lädt die Webseite ihre Bilder erst per JavaScript nach. "
+                "Das unterstützt Webfänger noch nicht.", "")
     headline = f"{total} {'Bild' if total == 1 else 'Bilder'} gefunden auf {host}"
     types = " · ".join(f"{t} {n}" for t, n in result.type_counts().most_common())
     kept, skipped = prefilter(result.candidates, allowed)
-    if skipped:
-        filt = f"{skipped} durch Dateityp-Filter ausgeblendet, {len(kept)} werden geladen"
+    if not kept:
+        filt = ("Alle sind durch den Dateityp-Filter ausgeblendet. Unter „Einstellungen“ "
+                "weitere Dateitypen anhaken.")
+    elif skipped:
+        filt = f"{skipped} durch den Dateityp-Filter ausgeblendet, {len(kept)} werden geprüft"
     else:
-        filt = f"Alle {len(kept)} werden geladen"
+        filt = f"Alle {len(kept)} werden geprüft"
     return headline, types, filt
 
 
@@ -37,8 +41,9 @@ def report_summary(report: DownloadReport) -> str:
     parts = [f"{head}: {saved} {'Bild' if saved == 1 else 'Bilder'} gespeichert "
              f"({format_bytes(report.bytes_written)})"]
     skipped = [(report.skipped_small, "zu klein"), (report.skipped_duplicate, "doppelt"),
-               (report.skipped_type, "Dateityp"), (report.skipped_existing, "schon vorhanden"),
-               (len(report.failed), "fehlgeschlagen")]
+               (report.skipped_type, "anderer Dateityp"),
+               (report.skipped_existing, "schon vorhanden"),
+               (len(report.failed), "mit Fehler")]
     details = ", ".join(f"{n} {label}" for n, label in skipped if n)
     if details:
         parts.append(f"Nicht gespeichert: {details}")

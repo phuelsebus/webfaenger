@@ -27,7 +27,8 @@ def normalize_url(raw: str) -> str:
         url = "https://" + url
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
-        raise ValueError(f"Ungültige URL: {raw.strip()}")
+        raise ValueError("Diese URL wird nicht unterstützt. Sie muss mit http:// oder "
+                         "https:// beginnen, z. B. https://example.com")
     return url
 
 
@@ -164,5 +165,6 @@ def scan(raw_url: str, timeout: float = 15) -> ScanResult:
             # Direktlink auf ein Bild: das Bild selbst ist das Ergebnis.
             return ScanResult(final_url, [ImageCandidate(final_url, "direkt",
                                                          type_from_url(final_url))])
-        raise FetchError("Die Adresse liefert keine Webseite.")
+        raise FetchError("Unter dieser URL liegt keine Webseite, sondern eine andere Datei "
+                         "(z. B. PDF oder Video).")
     return ScanResult(final_url, extract_images(decode_html(data, content_type), final_url))

@@ -19,7 +19,7 @@ from tkinter import font as tkfont
 from urllib.parse import urlsplit
 
 from . import settings as settings_mod
-from .downloader import Downloader, DownloadOptions
+from .downloader import Downloader, DownloadOptions, prefilter
 from .models import IMAGE_TYPES, DownloadReport, Progress, ScanResult
 from .naming import (Collision, NameContext, NamingMode, NamingOptions, build_stem,
                      sanitize, validate_pattern)
@@ -41,8 +41,8 @@ COLLISION_LABELS = {
     Collision.SKIP: "Bild überspringen",
 }
 
-PLACEHOLDER_HELP = ("Platzhalter: {name} Originalname · {nr} Nummer · {nr:03} dreistellig · "
-                    "{domain} · {datum} · {zeit} · {hash}")
+PLACEHOLDER_HELP = ("Platzhalter: {name} Originalname · {nr} Nummer ({nr:03} = 001) · "
+                    "{domain} Webseite · {datum} Datum · {zeit} Uhrzeit · {hash} Kurzkennung")
 
 
 def _setup_fonts_and_style(root: tk.Tk) -> None:
@@ -101,6 +101,36 @@ def _setup_fonts_and_style(root: tk.Tk) -> None:
                     bordercolor=c["border"], lightcolor=c["accent"], darkcolor=c["accent"])
 
 
+def _install_entry_menu(root: tk.Tk) -> None:
+    """Rechtsklick-Menü und Strg+A für alle Eingabefelder (bietet Tk nicht von selbst)."""
+    menu = tk.Menu(root, tearoff=False)
+    target: dict[str, tk.Widget] = {}
+
+    def select_all(widget) -> str:
+        widget.select_range(0, "end")
+        widget.icursor("end")
+        return "break"
+
+    for label, event in (("Ausschneiden", "<<Cut>>"), ("Kopieren", "<<Copy>>"),
+                         ("Einfügen", "<<Paste>>")):
+        menu.add_command(label=label, command=lambda e=event: target["w"].event_generate(e))
+    menu.add_separator()
+    menu.add_command(label="Alles markieren", command=lambda: select_all(target["w"]))
+
+    def popup(event) -> None:
+        target["w"] = event.widget
+        event.widget.focus_set()
+        menu.tk_popup(event.x_root, event.y_root)
+
+    for cls in ("TEntry", "TSpinbox"):
+        root.bind_class(cls, "<Button-3>", popup, add="+")
+        root.bind_class(cls, "<Control-a>", lambda e: select_all(e.widget))
+
+
+def _icon_path() -> Path:
+    return Path(__file__).resolve().parent / "assets" / "icon.ico"
+
+
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -126,7 +156,10 @@ class App:
         self.collision = tk.StringVar(value=COLLISION_LABELS[collision])
 
         root.title("Webfänger")
+        if _icon_path().is_file():
+            root.iconbitmap(default=str(_icon_path()))
         _setup_fonts_and_style(root)
+        _install_entry_menu(root)
         self._build()
 
         self.url.trace_add("write", lambda *_: self._on_url_changed())
@@ -324,8 +357,8 @@ class App:
         """idle → scanning → scanned → downloading → done."""
         self._state = state
         busy = state in ("scanning", "downloading")
-        can_download = state in ("scanned", "done") and bool(
-            self.scan_result and self.scan_result.candidates)
+        can_download = state in ("scanned", "done") and self.scan_result is not None and bool(
+            prefilter(self.scan_result.candidates, self._allowed_types())[0])
 
         self.search_btn.configure(
             state="disabled" if busy else "normal",
@@ -404,6 +437,7 @@ class App:
         self.headline.configure(text=headline)
         self.types_line.configure(text=types)
         self.filter_line.configure(text=filt)
+        self._set_state(self._state)  # Download-Knopf folgt dem Filter
 
     def _collect_settings(self) -> None:
         s = self.settings
@@ -450,7 +484,7 @@ class App:
         self._scan_id += 1
         scan_id = self._scan_id
         self.scan_result = None
-        self.headline.configure(text="Seite wird durchsucht…")
+        self.headline.configure(text="Webseite wird durchsucht…")
         self.types_line.configure(text=url)
         self.filter_line.configure(text="")
         self.status.configure(text="")
@@ -474,17 +508,21 @@ class App:
         folder_text = self.folder.get().strip()
         allowed = self._allowed_types()
         min_kb = self._min_kb()
-        problem = None
+        problem, in_options = None, True
         if not folder_text:
-            problem = "Bitte einen Zielordner wählen."
+            problem, in_options = ("Kein Zielordner angegeben. Bitte über „Durchsuchen…“ "
+                                   "einen Ordner wählen."), False
         elif not allowed:
-            problem = "Bitte mindestens einen Dateityp auswählen (Einstellungen)."
+            problem = "Kein Dateityp ausgewählt. Bitte mindestens einen Dateityp anhaken."
         elif min_kb is None:
-            problem = "Die Mindestgröße muss eine ganze Zahl ab 0 sein (Einstellungen)."
-        elif self.naming_mode.get() == NamingMode.PATTERN and validate_pattern(self.pattern.get()):
-            problem = "Das Namensmuster ist ungültig (Einstellungen)."
+            problem = "Die Mindestgröße muss eine ganze Zahl sein, z. B. 10."
+        elif self.naming_mode.get() == NamingMode.PATTERN and (
+                error := validate_pattern(self.pattern.get())):
+            problem = f"Das Namensmuster funktioniert so nicht: {error}"
         if problem:
-            messagebox.showwarning("Webfänger", problem, parent=self.root)
+            if in_options:
+                self._show_options(True)
+            messagebox.showwarning("Bitte prüfen", problem, parent=self.root)
             return
 
         folder = Path(folder_text).expanduser()
@@ -507,8 +545,11 @@ class App:
             try:
                 self.queue.put(("download_done", self.downloader.run(result.page_url,
                                                                       result.candidates)))
-            except Exception as exc:  # z. B. Zielordner nicht anlegbar
-                self.queue.put(("download_failed", str(exc)))
+            except OSError:
+                self.queue.put(("download_failed", "Der Zielordner lässt sich nicht anlegen. "
+                                                   "Bitte einen anderen Ordner wählen."))
+            except Exception as exc:
+                self.queue.put(("download_failed", f"Unerwarteter Fehler: {exc}"))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -526,12 +567,14 @@ class App:
         if self.last_folder and self.last_folder.is_dir():
             os.startfile(self.last_folder)  # noqa: S606 – öffnet den Explorer
         else:
-            messagebox.showinfo("Webfänger", "Der Ordner existiert noch nicht.", parent=self.root)
+            messagebox.showinfo("Ordner öffnen", "Den Ordner gibt es noch nicht. Er wird beim "
+                                "ersten Download angelegt.", parent=self.root)
 
     def _on_close(self) -> None:
         if self._state == "downloading":
-            if not messagebox.askyesno("Webfänger", "Der Download läuft noch. Abbrechen und "
-                                       "beenden?", parent=self.root):
+            if not messagebox.askyesno("Download läuft", "Download abbrechen und Webfänger "
+                                       "schließen?\n\nBereits gespeicherte Bilder bleiben "
+                                       "erhalten.", icon="warning", parent=self.root):
                 return
             if self.downloader:
                 self.downloader.cancel()
@@ -555,7 +598,7 @@ class App:
         if scan_id != self._scan_id:
             return
         if error:
-            self.headline.configure(text="Seite konnte nicht geladen werden")
+            self.headline.configure(text="Webseite konnte nicht geladen werden")
             self.types_line.configure(text=error)
             self._log(f"Fehler: {error}")
             self._set_state("idle")
@@ -575,7 +618,10 @@ class App:
         self._log(f"[{p.done}/{p.total}] {p.message}")
 
     def _on_download_done(self, report: DownloadReport) -> None:
-        self.status.configure(text=report_summary(report))
+        text = report_summary(report)
+        if report.failed:
+            text += "\nWas schiefging, steht unter „Details anzeigen“."
+        self.status.configure(text=text)
         for url, error in report.failed:
             self._log(f"Fehlgeschlagen: {url} ({error})")
         self._set_state("done")
@@ -583,7 +629,7 @@ class App:
             self.open_btn.focus_set()
 
     def _on_download_failed(self, error: str) -> None:
-        self.status.configure(text=f"Download fehlgeschlagen: {error}")
+        self.status.configure(text=f"Download nicht möglich. {error}")
         self._log(f"Fehler: {error}")
         self._set_state("scanned")
 

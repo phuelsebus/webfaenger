@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .models import DEFAULT_TYPES, DownloadReport, ImageCandidate, Progress
-from .naming import NameContext, NamingOptions, build_stem, resolve_target
+from .naming import NameContext, NamingOptions, build_stem, original_stem, resolve_target
 from .net import FetchError, fetch, type_from_mime, type_from_url
 
 
@@ -94,36 +94,37 @@ class Downloader:
                  error: str | None, state: _RunState, report: DownloadReport) -> str:
         """Prüft ein geladenes Bild und speichert es; gibt die Log-Meldung zurück."""
         opts = self.options
+        name = original_stem(c.url) or c.url
         if error:
             report.failed.append((c.url, error))
-            return f"Fehler: {error}"
+            return f"Fehler bei {name}: {error}"
         if img_type is None:
             report.skipped_type += 1
-            return "Kein Bild – übersprungen"
+            return f"Übersprungen, kein Bild: {name}"
         if img_type not in opts.allowed_types:
             report.skipped_type += 1
-            return f"Typ {img_type} abgewählt – übersprungen"
+            return f"Übersprungen, Dateityp {img_type.upper()} abgewählt: {name}"
         if len(data) < opts.min_kb * 1024:
             report.skipped_small += 1
-            return "Zu klein – übersprungen"
+            return f"Übersprungen, kleiner als {opts.min_kb} KB: {name}"
 
         digest = hashlib.sha1(data).hexdigest()
         if digest in state.seen_hashes:
             report.skipped_duplicate += 1
-            return "Doppelt – übersprungen"
+            return f"Übersprungen, doppelt: {name}"
         state.seen_hashes.add(digest)
 
         ctx = NameContext(c.url, state.page_url, state.next_index, digest, state.started)
-        target = resolve_target(opts.folder, build_stem(opts.naming, ctx), img_type,
-                                opts.naming.collision)
+        stem = build_stem(opts.naming, ctx)
+        target = resolve_target(opts.folder, stem, img_type, opts.naming.collision)
         if target is None:
             report.skipped_existing += 1
-            return "Existiert bereits – übersprungen"
+            return f"Übersprungen, Datei existiert schon: {stem}.{img_type}"
         try:
             _write_atomic(target, data)
         except OSError as exc:
-            report.failed.append((c.url, f"Speichern fehlgeschlagen: {exc}"))
-            return "Speichern fehlgeschlagen"
+            report.failed.append((c.url, f"Speichern fehlgeschlagen ({exc.strerror or exc})"))
+            return f"Fehler: {target.name} konnte nicht gespeichert werden"
         state.next_index += 1
         report.saved.append(target)
         report.bytes_written += len(data)

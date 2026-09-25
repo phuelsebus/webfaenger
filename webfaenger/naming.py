@@ -68,14 +68,16 @@ def original_stem(url: str) -> str:
     return stem
 
 
+class PatternError(ValueError):
+    """Verständliche Fehlermeldung zu einem Namensmuster."""
+
+
 class _SafeFormatter(string.Formatter):
     """Erlaubt nur einfache Platzhalter – kein Attribut- oder Indexzugriff."""
 
     def get_field(self, field_name, args, kwargs):
-        if not field_name.isidentifier():
-            raise ValueError(f"Ungültiger Platzhalter: {{{field_name}}}")
-        if field_name not in kwargs:
-            raise ValueError(f"Unbekannter Platzhalter: {{{field_name}}}")
+        if not field_name.isidentifier() or field_name not in kwargs:
+            raise PatternError(f"{{{field_name}}} ist kein bekannter Platzhalter.")
         return kwargs[field_name], field_name
 
 
@@ -86,10 +88,14 @@ def validate_pattern(pattern: str) -> str | None:
     """Gibt eine Fehlermeldung zurück oder None, wenn das Muster gültig ist."""
     sample = NameContext("https://example.com/foto.jpg", "https://example.com/",
                          1, "0" * 40, datetime(2026, 1, 1))
+    if not pattern.strip():
+        return "Das Muster ist leer."
     try:
         _render_pattern(pattern, sample)
-    except (ValueError, IndexError, KeyError) as exc:
-        return str(exc) or "Ungültiges Muster"
+    except PatternError as exc:
+        return str(exc)
+    except (ValueError, IndexError, KeyError):
+        return "Die geschweiften Klammern { } passen nicht zusammen."
     return None
 
 
