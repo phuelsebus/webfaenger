@@ -89,3 +89,14 @@ def test_to_ascii_url():
             == "https://xn--mller-kva.de/Bild%20%C3%A0.jpg?q=%C3%A4&x=1")
     assert to_ascii_url("https://a.org/x%20y.jpg") == "https://a.org/x%20y.jpg"
     assert to_ascii_url("http://127.0.0.1:8000/p") == "http://127.0.0.1:8000/p"
+
+
+def test_unknown_host_is_friendly_and_fast():
+    import time
+
+    from webfaenger.net import FetchError, fetch
+
+    start = time.monotonic()
+    with pytest.raises(FetchError, match="Adresse nicht gefunden"):
+        fetch("https://gibt-es-nicht.invalid/")
+    assert time.monotonic() - start < 5  # kein Warten auf Wiederholungen

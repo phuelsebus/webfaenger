@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import http.client
+import socket
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -83,10 +85,13 @@ def fetch(url: str, *, referer: str | None = None, timeout: float = 15,
                 continue
             raise FetchError(_http_message(exc.code)) from exc
         except urllib.error.URLError as exc:
-            if attempt < retries:
+            # Eine unbekannte Adresse oder ein Zertifikatsfehler ändert sich nicht
+            # beim erneuten Versuch.
+            permanent = isinstance(exc.reason, (socket.gaierror, ssl.SSLError))
+            if attempt < retries and not permanent:
                 time.sleep(1 + attempt)
                 continue
-            raise FetchError(f"Nicht erreichbar ({exc.reason})") from exc
+            raise FetchError(_url_error_message(exc.reason)) from exc
         except (TimeoutError, ConnectionError) as exc:
             if attempt < retries:
                 time.sleep(1 + attempt)
@@ -102,6 +107,20 @@ def _retry_delay(exc: urllib.error.HTTPError, attempt: int) -> float:
     if retry_after and retry_after.isdigit():
         return min(int(retry_after), 10)
     return 1.5 * (attempt + 1)
+
+
+def _url_error_message(reason: object) -> str:
+    if isinstance(reason, socket.gaierror):
+        return "Adresse nicht gefunden. Bitte URL und Internetverbindung prüfen."
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return "Das Sicherheitszertifikat der Seite ist ungültig."
+    if isinstance(reason, ssl.SSLError):
+        return "Sichere Verbindung zur Seite fehlgeschlagen."
+    if isinstance(reason, ConnectionRefusedError):
+        return "Der Server lehnt die Verbindung ab."
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return "Zeitüberschreitung: Die Seite antwortet nicht."
+    return "Seite nicht erreichbar. Bitte URL und Internetverbindung prüfen."
 
 
 def _http_message(code: int) -> str:

@@ -1,4 +1,4 @@
-"""Einstieg: `python -m webfaenger URL -o ORDNER` (Kommandozeile)."""
+"""Einstieg: ohne Argumente startet die Oberfläche, mit URL die Kommandozeile."""
 
 from __future__ import annotations
 
@@ -11,11 +11,19 @@ from .models import DEFAULT_TYPES, IMAGE_TYPES
 from .naming import Collision, NamingMode, NamingOptions, validate_pattern
 from .net import FetchError
 from .scraper import scan
+from .summary import report_summary, scan_summary
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if not argv:
+        from .gui import main as gui_main
+        gui_main()
+        return 0
+
     for stream in (sys.stdout, sys.stderr):  # umgeleitete Ausgabe nutzt sonst cp1252
-        stream.reconfigure(errors="replace")
+        if stream:  # in der .exe ohne Konsole gibt es keine Streams
+            stream.reconfigure(errors="replace")
     p = argparse.ArgumentParser(prog="webfaenger",
                                 description="Bilder einer Webseite herunterladen.")
     p.add_argument("url")
@@ -40,11 +48,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Fehler: {exc}", file=sys.stderr)
         return 1
 
-    counts = result.type_counts()
-    kept, skipped = prefilter(result.candidates, types)
-    print(f"{len(result.candidates)} Bilder gefunden auf {result.page_url}")
-    print("  " + " · ".join(f"{t} {n}" for t, n in counts.most_common()))
-    print(f"  ausgeblendet durch Typfilter: {skipped} → {len(kept)} werden geladen")
+    for line in scan_summary(result, types):
+        if line:
+            print(line)
+    kept, _ = prefilter(result.candidates, types)
     if args.nur_suchen or not kept:
         return 0
 
@@ -60,10 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         downloader.cancel()
         return 130
 
-    print(f"\nFertig: {len(report.saved)} gespeichert ({report.bytes_written / 1_048_576:.1f} MB)"
-          f" · zu klein {report.skipped_small} · doppelt {report.skipped_duplicate}"
-          f" · Typ {report.skipped_type} · vorhanden {report.skipped_existing}"
-          f" · Fehler {len(report.failed)}")
+    print("\n" + report_summary(report))
     print(f"Ordner: {args.ordner.resolve()}")
     return 0
 
