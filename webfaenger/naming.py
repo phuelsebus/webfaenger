@@ -135,3 +135,29 @@ def resolve_target(folder: Path, stem: str, ext: str, policy: Collision) -> Path
         if not target.exists():
             return target
         n += 1
+
+
+def folder_name(url: str) -> str:
+    """Ordnername für eine Suche, aus der URL abgeleitet.
+
+    https://www.bild.de/            -> bildde
+    https://www.wowhead.com/forever -> wowheadcom_forever
+    """
+    parts = urlsplit(url)
+    host = (parts.hostname or "seite").lower().removeprefix("www.").replace(".", "")
+    segments = [unquote(s) for s in parts.path.split("/") if s]
+    if segments:  # "artikel.html" -> "artikel"
+        segments[-1] = re.sub(r"\.(html?|php|aspx?)$", "", segments[-1], flags=re.IGNORECASE)
+    raw = re.sub(r"[^\w-]+", "_", "_".join([host, *segments]).lower())
+    raw = re.sub(r"_{2,}", "_", raw)[:60].strip("_-")
+    return sanitize(raw, fallback="seite")
+
+
+def unique_folder(parent: Path, name: str) -> Path:
+    """Freier Ordner für eine neue Suche: bildde, bildde_2, bildde_3, …
+
+    Ein leerer Ordner (z. B. von einem abgebrochenen Download) wird wiederverwendet."""
+    candidate, n = parent / name, 2
+    while candidate.exists() and (not candidate.is_dir() or any(candidate.iterdir())):
+        candidate, n = parent / f"{name}_{n}", n + 1
+    return candidate

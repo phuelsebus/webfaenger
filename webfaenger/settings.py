@@ -24,7 +24,7 @@ class Settings:
     prefix: str = "bild"
     pattern: str = "{domain}_{nr:03}"
     collision: str = "rename"
-    subfolder_per_site: bool = False
+    subfolder_per_search: bool = True
     show_options: bool = False
 
 

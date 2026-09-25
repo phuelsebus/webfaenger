@@ -16,13 +16,12 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from tkinter import font as tkfont
-from urllib.parse import urlsplit
 
 from . import settings as settings_mod
 from .downloader import Downloader, DownloadOptions, prefilter
 from .models import IMAGE_TYPES, DownloadReport, Progress, ScanResult
 from .naming import (Collision, NameContext, NamingMode, NamingOptions, build_stem,
-                     sanitize, validate_pattern)
+                     folder_name, unique_folder, validate_pattern)
 from .net import FetchError
 from .scraper import normalize_url, scan
 from .summary import format_bytes, report_summary, scan_summary
@@ -140,12 +139,13 @@ class App:
         self.downloader: Downloader | None = None
         self.last_folder: Path | None = None
         self._scan_id = 0
+        self._search_folder: Path | None = None  # Unterordner der aktuellen Suche
         self._state = "idle"
 
         s = self.settings
         self.url = tk.StringVar()
         self.folder = tk.StringVar(value=s.folder)
-        self.subfolder = tk.BooleanVar(value=s.subfolder_per_site)
+        self.subfolder = tk.BooleanVar(value=s.subfolder_per_search)
         self.type_vars = {t: tk.BooleanVar(value=t in s.types) for t in IMAGE_TYPES}
         self.min_kb = tk.StringVar(value=str(s.min_kb))
         self.naming_mode = tk.StringVar(value=s.naming_mode)
@@ -163,6 +163,8 @@ class App:
         self._build()
 
         self.url.trace_add("write", lambda *_: self._on_url_changed())
+        for var in (self.folder, self.subfolder):
+            var.trace_add("write", lambda *_: self._refresh_subfolder_hint())
         for var in (*self.type_vars.values(), self.min_kb):
             var.trace_add("write", lambda *_: self._refresh_summary())
         for var in (self.naming_mode, self.prefix, self.pattern):
@@ -171,6 +173,7 @@ class App:
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._refresh_naming()
+        self._refresh_subfolder_hint()
         self._set_state("idle")
         # Breite fest an den Startzustand binden; lange Texte brechen um statt
         # das Fenster aufzuziehen. Die Höhe folgt weiter dem Inhalt.
@@ -222,9 +225,11 @@ class App:
         self.browse_btn = ttk.Button(card, text="Durchsuchen…", command=self._browse, width=16)
         self.browse_btn.grid(row=2, column=2, sticky="ew", padx=(8, 0))
         self.subfolder_chk = ttk.Checkbutton(
-            card, text="Für jede Webseite einen eigenen Unterordner anlegen",
+            card, text="Für jede Suche einen eigenen Unterordner anlegen",
             variable=self.subfolder, style="Card.TCheckbutton")
         self.subfolder_chk.grid(row=3, column=1, columnspan=2, sticky="w", pady=(6, 0))
+        self.subfolder_hint = ttk.Label(card, text="", style="Muted.Card.TLabel")
+        self.subfolder_hint.grid(row=4, column=1, columnspan=2, sticky="w", padx=(24, 0))
 
     def _build_options(self, card: ttk.Frame) -> None:
         self.options_btn = ttk.Button(card, style="Link.TButton", command=self._toggle_options)
@@ -448,12 +453,43 @@ class App:
         s.prefix = self.prefix.get()
         s.pattern = self.pattern.get()
         s.collision = self._collision().value
-        s.subfolder_per_site = self.subfolder.get()
+        s.subfolder_per_search = self.subfolder.get()
 
     # ----------------------------------------------------------------- Aktionen
 
+    def _target_folder(self) -> Path | None:
+        """Zielordner der aktuellen Suche, mit Unterordner z. B. Webfänger/bildde."""
+        base_text = self.folder.get().strip()
+        if not base_text:
+            return None
+        base = Path(base_text).expanduser()
+        if not self.subfolder.get():
+            return base
+        # Pro Suche wird der Unterordner einmal festgelegt, damit ein zweiter
+        # Download derselben Suche im selben Ordner landet.
+        if self._search_folder is None or self._search_folder.parent != base:
+            try:
+                name = folder_name(normalize_url(self.url.get()))
+            except ValueError:
+                return None
+            return unique_folder(base, name)
+        return self._search_folder
+
+    def _refresh_subfolder_hint(self) -> None:
+        if not self.subfolder.get():
+            self.subfolder_hint.configure(text="")
+            return
+        target = self._target_folder() if self.url.get().strip() else None
+        if target is None:
+            self.subfolder_hint.configure(
+                text="Der Ordner wird nach der Webseite benannt, z. B. „bildde“ für bild.de")
+        else:
+            self.subfolder_hint.configure(text=f"Unterordner für diese Suche: {target.name}")
+
     def _on_url_changed(self) -> None:
         self.url_error.configure(text="")
+        self._search_folder = None
+        self._refresh_subfolder_hint()
         if self._state in ("scanned", "done"):
             self.scan_result = None
             self.headline.configure(text="Noch keine Seite durchsucht")
@@ -484,6 +520,8 @@ class App:
         self._scan_id += 1
         scan_id = self._scan_id
         self.scan_result = None
+        self._search_folder = None  # neue Suche, neuer Unterordner
+        self._refresh_subfolder_hint()
         self.headline.configure(text="Webseite wird durchsucht…")
         self.types_line.configure(text=url)
         self.filter_line.configure(text="")
@@ -525,10 +563,11 @@ class App:
             messagebox.showwarning("Bitte prüfen", problem, parent=self.root)
             return
 
-        folder = Path(folder_text).expanduser()
+        folder = self._target_folder() or Path(folder_text).expanduser()
         if self.subfolder.get():
-            folder /= sanitize(urlsplit(self.scan_result.page_url).hostname or "seite")
+            self._search_folder = folder
         self.last_folder = folder
+        self._refresh_subfolder_hint()
         self._collect_settings()
         settings_mod.save(self.settings)
 

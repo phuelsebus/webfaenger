@@ -11,6 +11,11 @@ ist eine einzelne `Webfaenger.exe` (ca. 10 MB) und braucht keine Installation.
 3. Die Übersicht zeigt, wie viele Bilder gefunden wurden. Mit
    „Herunterladen“ werden sie im Zielordner gespeichert.
 
+Jede Suche bekommt einen eigenen Unterordner im Zielordner, benannt nach
+der URL: `https://www.bild.de/` landet in `bildde`, eine zweite Suche auf
+derselben Seite in `bildde_2`. Die Option lässt sich unter dem Zielordner
+abschalten.
+
 Unter „Einstellungen anzeigen“ lassen sich Dateitypen, Mindestgröße und
 Dateinamen einstellen. Die Einstellungen bleiben gespeichert
 (`%APPDATA%\Webfaenger\settings.json`).

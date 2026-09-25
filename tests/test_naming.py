@@ -3,8 +3,8 @@ from datetime import datetime
 import pytest
 
 from webfaenger.naming import (Collision, NameContext, NamingMode, NamingOptions,
-                               build_stem, original_stem, resolve_target, sanitize,
-                               validate_pattern)
+                               build_stem, folder_name, original_stem, resolve_target,
+                               sanitize, unique_folder, validate_pattern)
 
 CTX = NameContext("https://cdn.example.com/img/Sonne%20Bild.jpg?w=800",
                   "https://www.example.com/galerie", 7, "abcdef1234" * 4,
@@ -61,3 +61,25 @@ def test_collisions(tmp_path):
     assert resolve_target(tmp_path, "a", "jpg", Collision.OVERWRITE).name == "a.jpg"
     assert resolve_target(tmp_path, "a", "jpg", Collision.SKIP) is None
     assert resolve_target(tmp_path, "b", "jpg", Collision.SKIP).name == "b.jpg"
+
+
+@pytest.mark.parametrize("url, expected", [
+    ("https://www.bild.de/", "bildde"),
+    ("https://www.wowhead.com/forever", "wowheadcom_forever"),
+    ("https://en.wikipedia.org/wiki/Red_panda", "enwikipediaorg_wiki_red_panda"),
+    ("https://example.com/news/artikel-42.html?id=5", "examplecom_news_artikel-42"),
+    ("https://müller.de/Fotos%20Urlaub/", "müllerde_fotos_urlaub"),
+    ("https://example.com/" + "a" * 100, "examplecom_" + "a" * 49),
+])
+def test_folder_name(url, expected):
+    assert folder_name(url) == expected
+
+
+def test_unique_folder(tmp_path):
+    assert unique_folder(tmp_path, "bildde").name == "bildde"
+    (tmp_path / "bildde").mkdir()
+    assert unique_folder(tmp_path, "bildde").name == "bildde"  # leer: wiederverwenden
+    (tmp_path / "bildde" / "a.jpg").write_bytes(b"x")
+    (tmp_path / "bildde_2").mkdir()
+    (tmp_path / "bildde_2" / "b.jpg").write_bytes(b"x")
+    assert unique_folder(tmp_path, "bildde").name == "bildde_3"

@@ -8,7 +8,8 @@ from pathlib import Path
 
 from .downloader import Downloader, DownloadOptions, prefilter
 from .models import DEFAULT_TYPES, IMAGE_TYPES
-from .naming import Collision, NamingMode, NamingOptions, validate_pattern
+from .naming import (Collision, NamingMode, NamingOptions, folder_name, unique_folder,
+                     validate_pattern)
 from .net import FetchError
 from .scraper import scan
 from .summary import report_summary, scan_summary
@@ -36,6 +37,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--muster", default="{domain}_{nr:03}")
     p.add_argument("--kollision", choices=[c.value for c in Collision], default="rename")
     p.add_argument("--nur-suchen", action="store_true", help="nur Übersicht, kein Download")
+    p.add_argument("--unterordner", action="store_true",
+                   help="eigenen Unterordner für diese Suche anlegen, z. B. bildde")
     args = p.parse_args(argv)
 
     if args.namen == "pattern" and (err := validate_pattern(args.muster)):
@@ -55,8 +58,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.nur_suchen or not kept:
         return 0
 
+    folder = args.ordner
+    if args.unterordner:
+        folder = unique_folder(folder, folder_name(result.page_url))
     options = DownloadOptions(
-        folder=args.ordner, allowed_types=types, min_kb=args.min_kb,
+        folder=folder, allowed_types=types, min_kb=args.min_kb,
         naming=NamingOptions(mode=NamingMode(args.namen), prefix=args.praefix,
                              pattern=args.muster, collision=Collision(args.kollision)))
     downloader = Downloader(options, on_progress=lambda pr: print(
@@ -68,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
         return 130
 
     print("\n" + report_summary(report))
-    print(f"Ordner: {args.ordner.resolve()}")
+    print(f"Ordner: {folder.resolve()}")
     return 0
 
 
