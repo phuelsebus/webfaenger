@@ -86,3 +86,7 @@ Das Icon (Spinnennetz, das ein Foto heranzieht) ist als SVG in
 `tools/make_icon.py` beschrieben. `python tools/make_icon.py` rendert es
 mit Microsoft Edge in alle Icon-Größen und schreibt `icon.ico` und
 `icon.png`; das Vektor-Logo liegt in `webfaenger/assets/logo.svg`.
+
+## Lizenz
+
+MIT, siehe [LICENSE](LICENSE).
