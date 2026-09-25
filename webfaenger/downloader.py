@@ -1,137 +1,171 @@
-"""Bilder parallel herunterladen, filtern und speichern."""
+"""Bilder parallel laden, prüfen und die ausgewählten speichern.
+
+Der Ablauf hat zwei Schritte: `Fetcher` lädt alle gefundenen Bilder in den
+Arbeitsspeicher, damit die Oberfläche eine Vorschau zeigen kann.
+`save_images` schreibt danach nur die ausgewählten auf die Festplatte.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import os
 import threading
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from .models import DEFAULT_TYPES, DownloadReport, ImageCandidate, Progress
-from .naming import NameContext, NamingOptions, build_stem, original_stem, resolve_target
+from .models import DownloadReport, ImageCandidate
+from .naming import NameContext, NamingOptions, build_stem, resolve_target
 from .net import FetchError, fetch, type_from_mime, type_from_url
 
-
-@dataclass
-class DownloadOptions:
-    folder: Path
-    naming: NamingOptions = field(default_factory=NamingOptions)
-    allowed_types: frozenset[str] = DEFAULT_TYPES
-    min_kb: int = 10
-    workers: int = 6
-    timeout: float = 20
-
-
-def prefilter(candidates: list[ImageCandidate],
-              allowed_types: frozenset[str]) -> tuple[list[ImageCandidate], int]:
-    """Entfernt Kandidaten, deren URL-Typ abgewählt ist. Unbekannte Typen bleiben
-    und werden nach dem Download anhand des Content-Type geprüft."""
-    kept = [c for c in candidates if c.type_hint is None or c.type_hint in allowed_types]
-    return kept, len(candidates) - len(kept)
+# Obergrenze für alle Bilder einer Suche im Speicher.
+MAX_TOTAL_BYTES = 400 * 1024 * 1024
 
 
 @dataclass
-class _RunState:
-    page_url: str
-    next_index: int
-    started: datetime = field(default_factory=datetime.now)
-    seen_hashes: set[str] = field(default_factory=set)
+class FetchedImage:
+    """Ein geladenes (oder gescheitertes) Bild einer Suche."""
+
+    id: int
+    url: str
+    status: str = "pending"  # ok, duplicate, notimage, error, cancelled
+    data: bytes | None = field(default=None, repr=False)
+    img_type: str | None = None
+    digest: str | None = None
+    error: str | None = None
+
+    @property
+    def size(self) -> int:
+        return len(self.data) if self.data else 0
 
 
-class Downloader:
-    """Lädt Kandidaten herunter. `cancel()` bricht ab, `on_progress` meldet den Stand.
+class Fetcher:
+    """Lädt Kandidaten parallel. `on_item` meldet jedes fertige Bild in Seitenreihenfolge."""
 
-    Netzwerkzugriffe laufen parallel; Auswertung, Benennung und Speichern passieren
-    nacheinander im aufrufenden Thread, daher ist keine Sperre nötig."""
-
-    def __init__(self, options: DownloadOptions,
-                 on_progress: Callable[[Progress], None] | None = None):
-        self.options = options
-        self.on_progress = on_progress or (lambda p: None)
+    def __init__(self, *, workers: int = 6, timeout: float = 20,
+                 on_item: Callable[[FetchedImage, int, int], None] | None = None,
+                 max_total_bytes: int = MAX_TOTAL_BYTES):
+        self.workers = workers
+        self.timeout = timeout
+        self.on_item = on_item or (lambda item, done, total: None)
+        self.max_total_bytes = max_total_bytes
         self._cancel = threading.Event()
 
     def cancel(self) -> None:
         self._cancel.set()
 
-    def run(self, page_url: str, candidates: list[ImageCandidate]) -> DownloadReport:
-        opts = self.options
-        report = DownloadReport()
-        todo, report.skipped_type = prefilter(candidates, opts.allowed_types)
-        opts.folder.mkdir(parents=True, exist_ok=True)
-        state = _RunState(page_url=page_url, next_index=opts.naming.start)
+    @property
+    def cancelled(self) -> bool:
+        return self._cancel.is_set()
 
-        def work(c: ImageCandidate):
+    def run(self, page_url: str, candidates: list[ImageCandidate]) -> list[FetchedImage]:
+        items = [FetchedImage(i, c.url) for i, c in enumerate(candidates)]
+        seen: set[str] = set()
+        total_bytes = 0
+
+        def work(item: FetchedImage):
             if self._cancel.is_set():
-                return None, None, None
+                return None
             try:
-                data, final_url, ctype = fetch(c.url, referer=page_url, timeout=opts.timeout)
+                data, final_url, ctype = fetch(item.url, referer=page_url, timeout=self.timeout)
             except FetchError as exc:
-                return None, None, str(exc)
+                return exc
             except Exception as exc:  # ein kaputtes Bild darf den Lauf nie beenden
-                return None, None, f"Unerwarteter Fehler: {exc}"
-            return data, type_from_mime(ctype) or type_from_url(final_url), None
+                return FetchError(f"Unerwarteter Fehler: {exc}")
+            return data, type_from_mime(ctype) or type_from_url(final_url)
 
-        with ThreadPoolExecutor(max_workers=max(1, opts.workers)) as pool:
-            futures = [pool.submit(work, c) for c in todo]
-            # Ergebnisse in Seitenreihenfolge auswerten, damit die Nummerierung
-            # der Reihenfolge auf der Webseite entspricht.
-            for done, (c, future) in enumerate(zip(todo, futures), start=1):
-                data, img_type, error = future.result()
+        with ThreadPoolExecutor(max_workers=max(1, self.workers)) as pool:
+            futures = [pool.submit(work, item) for item in items]
+            # In Seitenreihenfolge auswerten, damit Vorschau und Nummern der Seite folgen.
+            for done, (item, future) in enumerate(zip(items, futures), start=1):
+                result = future.result()
                 if self._cancel.is_set():
-                    report.cancelled = True
                     pool.shutdown(wait=False, cancel_futures=True)
-                    self._emit(done, len(todo), report, "Abgebrochen")
+                    for rest in items[done - 1:]:
+                        rest.status = "cancelled"
                     break
-                msg = self._process(c, data, img_type, error, state, report)
-                self._emit(done, len(todo), report, msg)
-        return report
+                if isinstance(result, FetchError):
+                    item.status, item.error = "error", str(result)
+                else:
+                    data, img_type = result
+                    digest = hashlib.sha1(data).hexdigest()
+                    if img_type is None:
+                        item.status = "notimage"
+                    elif digest in seen:
+                        item.status = "duplicate"
+                    elif total_bytes + len(data) > self.max_total_bytes:
+                        item.status, item.error = "error", "Speichergrenze der Vorschau erreicht"
+                    else:
+                        seen.add(digest)
+                        total_bytes += len(data)
+                        item.status, item.data = "ok", data
+                        item.img_type, item.digest = img_type, digest
+                self.on_item(item, done, len(items))
+        return items
 
-    def _process(self, c: ImageCandidate, data: bytes | None, img_type: str | None,
-                 error: str | None, state: _RunState, report: DownloadReport) -> str:
-        """Prüft ein geladenes Bild und speichert es; gibt die Log-Meldung zurück."""
-        opts = self.options
-        name = original_stem(c.url) or c.url
-        if error:
-            report.failed.append((c.url, error))
-            return f"Fehler bei {name}: {error}"
-        if img_type is None:
-            report.skipped_type += 1
-            return f"Übersprungen, kein Bild: {name}"
-        if img_type not in opts.allowed_types:
-            report.skipped_type += 1
-            return f"Übersprungen, Dateityp {img_type.upper()} abgewählt: {name}"
-        if len(data) < opts.min_kb * 1024:
-            report.skipped_small += 1
-            return f"Übersprungen, kleiner als {opts.min_kb} KB: {name}"
 
-        digest = hashlib.sha1(data).hexdigest()
-        if digest in state.seen_hashes:
-            report.skipped_duplicate += 1
-            return f"Übersprungen, doppelt: {name}"
-        state.seen_hashes.add(digest)
+def prefilter(candidates: list[ImageCandidate],
+              allowed_types: frozenset[str]) -> tuple[list[ImageCandidate], int]:
+    """Entfernt Kandidaten, deren URL-Typ abgewählt ist. Unbekannte Typen bleiben
+    und werden nach dem Laden anhand des Content-Type geprüft."""
+    kept = [c for c in candidates if c.type_hint is None or c.type_hint in allowed_types]
+    return kept, len(candidates) - len(kept)
 
-        ctx = NameContext(c.url, state.page_url, state.next_index, digest, state.started)
-        stem = build_stem(opts.naming, ctx)
-        target = resolve_target(opts.folder, stem, img_type, opts.naming.collision)
+
+@dataclass
+class Selection:
+    chosen: list[FetchedImage]
+    skipped_type: int
+    skipped_small: int
+
+
+def select(items: Iterable[FetchedImage], allowed_types: frozenset[str],
+           min_kb: int) -> Selection:
+    """Wählt die geladenen Bilder aus, die zu Typ- und Größenfilter passen."""
+    chosen, wrong_type, small = [], 0, 0
+    for item in items:
+        if item.status != "ok":
+            continue
+        if item.img_type not in allowed_types:
+            wrong_type += 1
+        elif item.size < min_kb * 1024:
+            small += 1
+        else:
+            chosen.append(item)
+    return Selection(chosen, wrong_type, small)
+
+
+def save_images(items: list[FetchedImage], *, page_url: str, folder: Path,
+                naming: NamingOptions,
+                on_progress: Callable[[int, int, str], None] | None = None) -> DownloadReport:
+    """Schreibt die Bilder in `folder`; die Nummerierung folgt der Reihenfolge von `items`."""
+    report = DownloadReport()
+    folder.mkdir(parents=True, exist_ok=True)
+    started = datetime.now()
+    index = naming.start
+    for done, item in enumerate(items, start=1):
+        ctx = NameContext(item.url, page_url, index, item.digest or "", started)
+        stem = build_stem(naming, ctx)
+        target = resolve_target(folder, stem, item.img_type, naming.collision)
         if target is None:
             report.skipped_existing += 1
-            return f"Übersprungen, Datei existiert schon: {stem}.{img_type}"
-        try:
-            _write_atomic(target, data)
-        except OSError as exc:
-            report.failed.append((c.url, f"Speichern fehlgeschlagen ({exc.strerror or exc})"))
-            return f"Fehler: {target.name} konnte nicht gespeichert werden"
-        state.next_index += 1
-        report.saved.append(target)
-        report.bytes_written += len(data)
-        return f"Gespeichert: {target.name}"
-
-    def _emit(self, done: int, total: int, report: DownloadReport, msg: str) -> None:
-        self.on_progress(Progress(done, total, len(report.saved), report.bytes_written, msg))
+            message = f"Übersprungen, Datei existiert schon: {stem}.{item.img_type}"
+        else:
+            try:
+                _write_atomic(target, item.data)
+            except OSError as exc:
+                report.failed.append((item.url, f"Speichern fehlgeschlagen ({exc.strerror or exc})"))
+                message = f"Fehler: {target.name} konnte nicht gespeichert werden"
+            else:
+                index += 1
+                report.saved.append(target)
+                report.bytes_written += item.size
+                message = f"Gespeichert: {target.name}"
+        if on_progress:
+            on_progress(done, len(items), message)
+    return report
 
 
 def _write_atomic(target: Path, data: bytes) -> None:

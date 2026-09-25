@@ -10,21 +10,22 @@ if (-not (Test-Path $python)) {
     exit 1
 }
 
-& $python -m pip install --quiet --disable-pip-version-check pyinstaller
+& $python -m pip install --quiet --disable-pip-version-check pyinstaller pywebview
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 & $python -m pytest -q
 if ($LASTEXITCODE -ne 0) { Write-Host "Tests fehlgeschlagen, Build abgebrochen."; exit 1 }
 
 # Module, die die App nie braucht, bleiben draußen und halten die .exe klein.
-$exclude = @("unittest", "pydoc", "doctest", "pdb", "sqlite3", "xmlrpc",
-             "multiprocessing", "asyncio", "pytest", "_pytest")
+$exclude = @("tkinter", "_tkinter", "unittest", "pydoc", "doctest", "pdb", "sqlite3",
+             "xmlrpc", "asyncio", "pytest", "_pytest")
 
 $pyiArgs = @(
     "--noconfirm", "--clean", "--onefile", "--windowed",
     "--name", "Webfaenger",
     "--icon", "webfaenger\assets\icon.ico",
-    "--add-data", "webfaenger\assets;webfaenger\assets"
+    "--add-data", "webfaenger\assets;webfaenger\assets",
+    "--add-data", "webfaenger\web;webfaenger\web"
 )
 foreach ($m in $exclude) { $pyiArgs += @("--exclude-module", $m) }
 

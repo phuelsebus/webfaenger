@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'">
+<title>Webfänger</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <img class="logo" src="icon.png" alt="">
+    <div class="titles">
+      <h1>Webfänger</h1>
+      <p>Bilder von einer Webseite in einen Ordner herunterladen</p>
+    </div>
+    <button id="settingsBtn" class="icon-btn" type="button" aria-label="Einstellungen"
+            title="Einstellungen">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/>
+        <circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+    </button>
+  </header>
+
+  <form id="searchForm" class="card search" autocomplete="off">
+    <label for="url" class="field-label">Webseite</label>
+    <div class="row">
+      <input id="url" type="text" placeholder="https://example.com/galerie" spellcheck="false">
+      <button id="searchBtn" class="btn primary" type="submit">Bilder suchen</button>
+    </div>
+    <p id="urlError" class="error" role="alert"></p>
+  </form>
+
+  <section class="card results" aria-labelledby="headline">
+    <div class="results-head">
+      <div class="summary">
+        <h2 id="headline">Noch keine Seite durchsucht</h2>
+        <p id="subline" class="muted">URL oben einfügen und auf „Bilder suchen“ klicken.</p>
+      </div>
+      <div id="tools" class="tools" hidden>
+        <div id="typeChips" class="chips" role="group" aria-label="Dateitypen anzeigen"></div>
+        <label class="minsize" title="Kleinere Bilder wie Icons ausblenden">
+          ab <input id="minKb" type="number" min="0" step="5" inputmode="numeric"> KB
+        </label>
+        <div class="seg">
+          <button id="selectAll" class="btn ghost small" type="button">Alle</button>
+          <button id="selectNone" class="btn ghost small" type="button">Keine</button>
+        </div>
+      </div>
+    </div>
+    <div id="progress" class="progress" hidden><div id="progressBar" class="bar"></div></div>
+    <div id="grid" class="grid" role="group" aria-label="Gefundene Bilder"></div>
+    <div id="empty" class="empty">
+      <svg viewBox="0 0 48 48" aria-hidden="true"><rect x="6" y="9" width="36" height="30" rx="5"/>
+        <circle cx="31" cy="19" r="3.5"/><path d="M6 33l10-10 9 9 5-5 12 12"/></svg>
+      <p>Die gefundenen Bilder erscheinen hier als Vorschau.<br>
+        Ausgewählte Bilder werden gespeichert, ein Klick wählt ab oder wieder an.</p>
+    </div>
+    <details id="problems" class="problems" hidden>
+      <summary id="problemsSummary"></summary>
+      <ul id="problemList"></ul>
+    </details>
+  </section>
+
+  <footer class="card savebar">
+    <div class="folder">
+      <label for="folder" class="field-label">Zielordner</label>
+      <div class="row">
+        <input id="folder" type="text" spellcheck="false">
+        <button id="browseBtn" class="btn" type="button">Durchsuchen…</button>
+      </div>
+      <label class="check">
+        <input id="subfolder" type="checkbox">
+        <span>Eigener Unterordner für jede Suche</span>
+        <span id="subfolderName" class="muted small"></span>
+      </label>
+    </div>
+    <div class="actions">
+      <p id="status" class="muted" aria-live="polite"></p>
+      <div class="row">
+        <button id="cancelBtn" class="btn" type="button" hidden>Abbrechen</button>
+        <button id="openBtn" class="btn" type="button" hidden>Ordner öffnen</button>
+        <button id="saveBtn" class="btn primary" type="button" disabled>Bilder speichern</button>
+      </div>
+    </div>
+  </footer>
+</div>
+
+<dialog id="settings" class="drawer" aria-labelledby="settingsTitle">
+  <div class="drawer-head">
+    <h2 id="settingsTitle" tabindex="-1" autofocus data-autofocus>Einstellungen</h2>
+    <button class="icon-btn" type="button" data-close aria-label="Schließen">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </div>
+
+  <fieldset>
+    <legend class="field-label">Dateinamen</legend>
+    <div class="segmented" role="radiogroup">
+      <label><input type="radio" name="naming" value="original"><span>Originalname</span></label>
+      <label><input type="radio" name="naming" value="numbered"><span>Nummeriert</span></label>
+      <label><input type="radio" name="naming" value="pattern"><span>Eigenes Muster</span></label>
+    </div>
+    <div id="prefixRow" class="sub" hidden>
+      <label for="prefix" class="field-label">Präfix</label>
+      <input id="prefix" type="text" spellcheck="false">
+    </div>
+    <div id="patternRow" class="sub" hidden>
+      <label for="pattern" class="field-label">Muster</label>
+      <input id="pattern" type="text" spellcheck="false">
+      <p class="muted small">Platzhalter: {name} Originalname · {nr} Nummer ({nr:03} = 001) ·
+        {domain} Webseite · {datum} Datum · {zeit} Uhrzeit · {hash} Kurzkennung</p>
+    </div>
+    <p id="namePreview" class="preview"></p>
+  </fieldset>
+
+  <fieldset>
+    <legend class="field-label">Wenn eine Datei schon existiert</legend>
+    <select id="collision"></select>
+  </fieldset>
+</dialog>
+
+<dialog id="viewer" class="viewer" aria-label="Bildansicht">
+  <div class="viewer-stage" tabindex="-1" autofocus data-autofocus>
+    <button id="prevBtn" class="nav prev" type="button" aria-label="Vorheriges Bild">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+    </button>
+    <img id="viewerImg" alt="">
+    <button id="nextBtn" class="nav next" type="button" aria-label="Nächstes Bild">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+    </button>
+  </div>
+  <div class="viewer-bar">
+    <div class="viewer-info"><strong id="viewerName"></strong><span id="viewerMeta" class="muted"></span></div>
+    <label class="check"><input id="viewerSelect" type="checkbox"><span>Ausgewählt</span></label>
+    <button class="btn" type="button" data-close>Schließen</button>
+  </div>
+</dialog>
+
+<template id="tileTemplate">
+  <div class="tile" role="checkbox" tabindex="0">
+    <div class="thumb"><img alt="" draggable="false"></div>
+    <span class="mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9"/></svg>
+    </span>
+    <button class="zoom" type="button" tabindex="-1" aria-label="Groß anzeigen">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg>
+    </button>
+    <div class="meta"><span class="name"></span><span class="info"></span></div>
+  </div>
+</template>
+
+<script src="app.js"></script>
+</body>
+</html>

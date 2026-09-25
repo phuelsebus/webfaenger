@@ -5,9 +5,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from webfaenger.downloader import Downloader, DownloadOptions
+from webfaenger.downloader import Fetcher, save_images, select
 from webfaenger.models import DEFAULT_TYPES
-from webfaenger.naming import NamingMode, NamingOptions
+from webfaenger.naming import Collision, NamingMode, NamingOptions
 from webfaenger.scraper import scan
 
 BIG = b"\xff\xd8" + b"J" * 20_000       # "JPEG", 20 KB
@@ -56,28 +56,52 @@ def server():
     httpd.shutdown()
 
 
-def test_end_to_end(server, tmp_path):
+def test_fetch_select_save(server, tmp_path):
     result = scan(server)
     assert len(result.candidates) == 7
 
-    options = DownloadOptions(folder=tmp_path, min_kb=10, allowed_types=DEFAULT_TYPES,
-                              naming=NamingOptions(mode=NamingMode.NUMBERED, prefix="bild"))
-    events = []
-    report = Downloader(options, on_progress=events.append).run(result.page_url,
-                                                                 result.candidates)
+    seen = []
+    items = Fetcher(on_item=lambda item, done, total: seen.append((item.id, done, total))).run(
+        result.page_url, result.candidates)
+    status = {i.url.rsplit("/", 1)[1]: i.status for i in items}
+    assert status == {"one.jpg": "ok", "two.png": "ok", "copy.jpg": "duplicate",
+                      "tiny.jpg": "ok", "missing.jpg": "error", "noext": "ok",
+                      "vector.svg": "ok"}
+    assert [s[0] for s in seen] == list(range(7))  # Seitenreihenfolge
+    assert next(i for i in items if i.status == "error").error.endswith("(404)")
 
+    chosen = select(items, DEFAULT_TYPES, min_kb=10)
+    assert chosen.skipped_small == 1 and chosen.skipped_type == 1  # tiny.jpg, svg
+
+    progress = []
+    report = save_images(chosen.chosen, page_url=result.page_url, folder=tmp_path,
+                         naming=NamingOptions(mode=NamingMode.NUMBERED, prefix="bild"),
+                         on_progress=lambda done, total, msg: progress.append(done))
     assert sorted(p.name for p in tmp_path.iterdir()) == ["bild_001.jpg", "bild_002.png",
                                                           "bild_003.webp"]
-    assert report.skipped_duplicate == 1
-    assert report.skipped_small == 1
-    assert report.skipped_type == 1          # svg ist standardmäßig abgewählt
-    assert len(report.failed) == 1 and "404" in report.failed[0][1]
-    assert events[-1].done == events[-1].total == 6
+    assert report.bytes_written == sum(i.size for i in chosen.chosen)
+    assert progress == [1, 2, 3]
 
 
-def test_cancel(server, tmp_path):
+def test_save_skips_existing(server, tmp_path):
     result = scan(server)
-    downloader = Downloader(DownloadOptions(folder=tmp_path, workers=1))
-    downloader.cancel()
-    report = downloader.run(result.page_url, result.candidates)
-    assert report.cancelled and not report.saved
+    items = select(Fetcher().run(result.page_url, result.candidates), DEFAULT_TYPES, 10).chosen
+    naming = NamingOptions(collision=Collision.SKIP)
+    save_images(items, page_url=result.page_url, folder=tmp_path, naming=naming)
+    again = save_images(items, page_url=result.page_url, folder=tmp_path, naming=naming)
+    assert again.skipped_existing == 3 and not again.saved
+
+
+def test_cancel(server):
+    result = scan(server)
+    fetcher = Fetcher(workers=1)
+    fetcher.cancel()
+    items = fetcher.run(result.page_url, result.candidates)
+    assert all(i.status == "cancelled" for i in items)
+
+
+def test_memory_limit(server):
+    result = scan(server)
+    items = Fetcher(max_total_bytes=25_000).run(result.page_url, result.candidates)
+    assert [i.status for i in items[:2]] == ["ok", "error"]
+    assert "Speichergrenze" in items[1].error

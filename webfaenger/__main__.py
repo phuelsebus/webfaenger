@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .downloader import Downloader, DownloadOptions, prefilter
+from .downloader import Fetcher, save_images, select
 from .models import DEFAULT_TYPES, IMAGE_TYPES
 from .naming import (Collision, NamingMode, NamingOptions, folder_name, unique_folder,
                      validate_pattern)
@@ -18,7 +18,7 @@ from .summary import report_summary, scan_summary
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if not argv:
-        from .gui import main as gui_main
+        from .webapp import main as gui_main
         gui_main()
         return 0
 
@@ -54,24 +54,28 @@ def main(argv: list[str] | None = None) -> int:
     for line in scan_summary(result, types):
         if line:
             print(line)
-    kept, _ = prefilter(result.candidates, types)
-    if args.nur_suchen or not kept:
+    if args.nur_suchen or not result.candidates:
         return 0
+
+    fetcher = Fetcher(on_item=lambda item, done, total: print(
+        f"  [{done}/{total}] {item.status}: {item.url}"))
+    try:
+        items = fetcher.run(result.page_url, result.candidates)
+    except KeyboardInterrupt:
+        fetcher.cancel()
+        return 130
+    chosen = select(items, types, args.min_kb)
 
     folder = args.ordner
     if args.unterordner:
         folder = unique_folder(folder, folder_name(result.page_url))
-    options = DownloadOptions(
-        folder=folder, allowed_types=types, min_kb=args.min_kb,
-        naming=NamingOptions(mode=NamingMode(args.namen), prefix=args.praefix,
-                             pattern=args.muster, collision=Collision(args.kollision)))
-    downloader = Downloader(options, on_progress=lambda pr: print(
-        f"  [{pr.done}/{pr.total}] {pr.message}"))
-    try:
-        report = downloader.run(result.page_url, result.candidates)
-    except KeyboardInterrupt:
-        downloader.cancel()
-        return 130
+    naming = NamingOptions(mode=NamingMode(args.namen), prefix=args.praefix,
+                           pattern=args.muster, collision=Collision(args.kollision))
+    report = save_images(chosen.chosen, page_url=result.page_url, folder=folder, naming=naming)
+    report.skipped_type = chosen.skipped_type + sum(i.status == "notimage" for i in items)
+    report.skipped_small = chosen.skipped_small
+    report.skipped_duplicate = sum(i.status == "duplicate" for i in items)
+    report.failed = [(i.url, i.error or "") for i in items if i.status == "error"] + report.failed
 
     print("\n" + report_summary(report))
     print(f"Ordner: {folder.resolve()}")
