@@ -1,6 +1,6 @@
 import pytest
 
-from webfaenger.net import to_ascii_url
+from webfaenger.net import _sec_fetch_site, to_ascii_url
 from webfaenger.scraper import decode_html, extract_images, normalize_url, parse_srcset
 
 PAGE = "https://example.com/blog/post.html"
@@ -100,3 +100,31 @@ def test_unknown_host_is_friendly_and_fast():
     with pytest.raises(FetchError, match="Adresse nicht gefunden"):
         fetch("https://gibt-es-nicht.invalid/")
     assert time.monotonic() - start < 5  # kein Warten auf Wiederholungen
+
+
+def test_sec_fetch_site():
+    assert _sec_fetch_site("https://a.de/x", None) == "none"
+    assert _sec_fetch_site("https://a.de/i.jpg", "https://a.de/seite") == "same-origin"
+    assert _sec_fetch_site("https://cdn.a.de/i.jpg", "https://www.a.de/") == "same-site"
+    assert _sec_fetch_site("https://zamimg.com/i.jpg", "https://www.wowhead.com/") == "cross-site"
+
+
+SCRIPT_HTML = r"""
+<style>.hero { background: url("/img/hero.jpg") }</style>
+<script>window.data = {"posts": [
+  {"image": "https:\/\/cdn.example.com\/uploads\/post-1.jpg"},
+  {"image": "https://cdn.example.com/post-2.png?w=800"},
+  {"url": "https://example.com/seite.html", "icon": "https://example.com/logo.svg"}
+]};</script>
+<script type="application/ld+json">{"image": ["https://example.com/ld.webp"]}</script>
+"""
+
+
+def test_images_from_script_and_style():
+    urls = [c.url for c in extract_images(SCRIPT_HTML, PAGE)]
+    assert urls == [
+        "https://example.com/img/hero.jpg",
+        "https://cdn.example.com/uploads/post-1.jpg",
+        "https://cdn.example.com/post-2.png?w=800",
+        "https://example.com/ld.webp",
+    ]

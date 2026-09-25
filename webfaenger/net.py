@@ -14,7 +14,29 @@ from urllib.parse import quote, unquote, urlsplit, urlunsplit
 from .models import IMAGE_TYPES
 
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-              "(KHTML, like Gecko) Chrome/128.0 Safari/537.36")
+              "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+
+# Header, die Chrome bei jedem Abruf mitschickt. Schutzdienste wie CloudFront oder
+# Cloudflare sperren Anfragen ohne sie oft mit 403 (z. B. wowhead.com).
+_BROWSER_HEADERS = {
+    "User-Agent": USER_AGENT,
+    "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+    "sec-ch-ua": '"Chromium";v="140", "Google Chrome";v="140", "Not;A=Brand";v="99"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
+}
+_KIND_HEADERS = {
+    "document": {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,"
+                  "image/avif,image/webp,*/*;q=0.8",
+        "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-User": "?1", "Upgrade-Insecure-Requests": "1",
+    },
+    "image": {
+        "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "Sec-Fetch-Dest": "image", "Sec-Fetch-Mode": "no-cors",
+    },
+}
 
 _EXT_ALIASES = {"jpeg": "jpg", "jpe": "jpg", "jfif": "jpg", "tif": "tiff", "svgz": "svg"}
 
@@ -59,12 +81,24 @@ def type_from_mime(content_type: str | None) -> str | None:
     return _MIME_TO_TYPE.get(content_type.split(";")[0].strip().lower())
 
 
+def _sec_fetch_site(url: str, referer: str | None) -> str:
+    if not referer:
+        return "none"  # direkt eingegebene Adresse
+    a, b = urlsplit(url), urlsplit(referer)
+    if (a.scheme, a.hostname, a.port) == (b.scheme, b.hostname, b.port):
+        return "same-origin"
+    same_site = (a.hostname or "").split(".")[-2:] == (b.hostname or "").split(".")[-2:]
+    return "same-site" if same_site else "cross-site"
+
+
 def fetch(url: str, *, referer: str | None = None, timeout: float = 15,
           max_bytes: int = 50 * 1024 * 1024, retries: int = 2,
-          accept: str = "*/*") -> tuple[bytes, str, str | None]:
-    """Lädt eine URL. Gibt (Inhalt, finale URL, Content-Type) zurück."""
-    headers = {"User-Agent": USER_AGENT, "Accept": accept,
-               "Accept-Language": "de,en;q=0.8"}
+          kind: str = "image") -> tuple[bytes, str, str | None]:
+    """Lädt eine URL wie ein Browser (kind: "document" oder "image").
+
+    Gibt (Inhalt, finale URL, Content-Type) zurück."""
+    headers = {**_BROWSER_HEADERS, **_KIND_HEADERS[kind],
+               "Sec-Fetch-Site": _sec_fetch_site(url, referer)}
     if referer:
         headers["Referer"] = to_ascii_url(referer)
     request = urllib.request.Request(to_ascii_url(url), headers=headers)

@@ -15,6 +15,10 @@ _LAZY_SRCSET = ("data-srcset", "data-lazy-srcset")
 _META_KEYS = {"og:image", "og:image:url", "og:image:secure_url", "twitter:image",
               "twitter:image:src"}
 _CSS_URL = re.compile(r"""url\(\s*(['"]?)(.+?)\1\s*\)""", re.IGNORECASE)
+# Absolute Bild-URLs in Skript-Daten (JSON o. Ä.), nach dem Entfernen von \/ und /.
+_SCRIPT_IMAGE_URL = re.compile(
+    r"""https?://[^\s"'<>\\]+?\.(?:jpe?g|png|gif|webp|avif)(?:\?[^\s"'<>\\]*)?"""
+    r"""(?=["'\s<>\\,)\]}]|$)""", re.IGNORECASE)
 _CHARSET = re.compile(rb"""<meta[^>]+charset=["']?([\w-]+)""", re.IGNORECASE)
 
 
@@ -76,6 +80,7 @@ class _ImageExtractor(HTMLParser):
         self.base_url = base_url
         self.found: list[tuple[str, str]] = []  # (roh-URL, Quelle)
         self._base_seen = False
+        self._raw_tag: str | None = None  # gerade offenes <script> oder <style>
 
     def _add(self, raw: str | None, source: str) -> None:
         if raw and raw.strip():
@@ -83,6 +88,8 @@ class _ImageExtractor(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         a = {k: v for k, v in attrs if v is not None}
+        if tag in ("script", "style"):
+            self._raw_tag = tag
 
         if tag == "base" and a.get("href") and not self._base_seen:
             self.base_url = urljoin(self.base_url, a["href"])
@@ -107,6 +114,21 @@ class _ImageExtractor(HTMLParser):
         style = a.get("style")
         if style and "url(" in style:
             for match in _CSS_URL.finditer(style):
+                self._add(match.group(2), "style")
+
+    def handle_endtag(self, tag):
+        if tag == self._raw_tag:
+            self._raw_tag = None
+
+    def handle_data(self, data):
+        # Viele Seiten liefern Bilddaten als JSON in <script> mit, die erst
+        # JavaScript sichtbar macht. Die Adressen lassen sich direkt herauslesen.
+        if self._raw_tag == "script" and "http" in data:
+            plain = data.replace("\\/", "/").replace("\\u002F", "/").replace("\\u002f", "/")
+            for match in _SCRIPT_IMAGE_URL.finditer(plain):
+                self._add(match.group(0), "script")
+        elif self._raw_tag == "style" and "url(" in data:
+            for match in _CSS_URL.finditer(data):
                 self._add(match.group(2), "style")
 
     def _handle_img(self, a: dict[str, str]) -> None:
@@ -158,8 +180,7 @@ def scan(raw_url: str, timeout: float = 15) -> ScanResult:
     """Lädt die Seite und liefert alle gefundenen Bilder."""
     url = normalize_url(raw_url)
     data, final_url, content_type = fetch(
-        url, timeout=timeout, max_bytes=15 * 1024 * 1024,
-        accept="text/html,application/xhtml+xml;q=0.9,*/*;q=0.8")
+        url, timeout=timeout, max_bytes=15 * 1024 * 1024, kind="document")
     if content_type and not any(t in content_type.lower() for t in ("html", "xml")):
         if content_type.lower().startswith("image/"):
             # Direktlink auf ein Bild: das Bild selbst ist das Ergebnis.
