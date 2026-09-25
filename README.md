@@ -50,4 +50,7 @@ python -m venv .venv
 powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 
-Das Icon wird mit `python tools/make_icon.py` neu erzeugt.
+Das Icon (Spinnennetz, das ein Foto heranzieht) ist als SVG in
+`tools/make_icon.py` beschrieben. `python tools/make_icon.py` rendert es
+mit Microsoft Edge in alle Icon-Größen und schreibt `icon.ico` und
+`icon.png`; das Vektor-Logo liegt in `webfaenger/assets/logo.svg`.
